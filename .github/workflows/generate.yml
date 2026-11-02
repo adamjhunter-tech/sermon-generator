@@ -35,9 +35,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install yt-dlp and ffmpeg
+      - name: Install dependencies
         run: |
-          pip install yt-dlp
+          pip install yt-dlp groq
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg
 

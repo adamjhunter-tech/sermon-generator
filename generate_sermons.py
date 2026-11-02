@@ -175,37 +175,19 @@ def download_audio(url: str, dest: Path) -> None:
 
 
 def transcribe_groq(audio_path: Path) -> str:
-    """Transcribe with Groq Whisper (whisper-large-v3)."""
+    """Transcribe with Groq Whisper via the official client."""
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY not set")
-    # Minimal multipart POST (no requests dependency)
-    boundary = "----SermonBoundary"
-    body = []
-    body.append(f"--{boundary}".encode())
-    body.append(b'Content-Disposition: form-data; name="model"')
-    body.append(b"")
-    body.append(b"whisper-large-v3")
-    body.append(f"--{boundary}".encode())
-    body.append(b'Content-Disposition: form-data; name="file"; filename="audio.mp3"')
-    body.append(b"Content-Type: audio/mpeg")
-    body.append(b"")
-    body.append(audio_path.read_bytes())
-    body.append(f"--{boundary}--".encode())
-    body.append(b"")
-    data = b"\r\n".join(body)
-
-    req = urllib.request.Request(
-        "https://api.groq.com/openai/v1/audio/transcriptions",
-        data=data,
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        result = json.loads(resp.read())
-    return result.get("text", "")
+    from groq import Groq
+    client = Groq(api_key=GROQ_API_KEY)
+    with open(audio_path, "rb") as f:
+        result = client.audio.transcriptions.create(
+            file=(audio_path.name, f),
+            model="whisper-large-v3",
+            response_format="text",
+        )
+    # result is a string when response_format="text"
+    return result if isinstance(result, str) else getattr(result, "text", str(result))
 
 
 def analyze_with_groq(transcript: str, description: str, rss_date: str) -> dict:
