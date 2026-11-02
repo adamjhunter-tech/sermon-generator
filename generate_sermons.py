@@ -225,25 +225,16 @@ def analyze_with_groq(transcript: str, description: str, rss_date: str) -> dict:
             "summary": description[:500] if description else "",
         }
 
+    from groq import Groq
+    client = Groq(api_key=GROQ_API_KEY)
     prompt = ANALYSIS_PROMPT + f"\n\nDescription:\n{description}\n\nTranscript:\n{transcript[:12000]}"
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-    }
-    req = urllib.request.Request(
-        "https://api.groq.com/openai/v1/chat/completions",
-        data=json.dumps(payload).encode(),
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    result = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2,
+        response_format={"type": "json_object"},
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        result = json.loads(resp.read())
-    content = result["choices"][0]["message"]["content"]
+    content = result.choices[0].message.content
     return json.loads(content)
 
 
