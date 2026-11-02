@@ -145,31 +145,33 @@ def parse_date(pub_date: str) -> str:
 
 
 def download_audio(url: str, dest: Path) -> None:
-    """Download audio using yt-dlp (handles SoundCloud 403s)."""
+    """Download audio using yt-dlp with options that avoid SoundCloud 403s."""
     import subprocess
-    import shutil
-    # Prefer the SoundCloud page URL if we have it; fall back to the enclosure URL
-    target = url
+    # Download original format (no ffmpeg conversion needed) and use a browser UA
     cmd = [
         "yt-dlp",
         "--no-playlist",
-        "--extract-audio",
-        "--audio-format", "mp3",
-        "--audio-quality", "0",
-        "-o", str(dest.with_suffix("")),
+        "--format", "bestaudio/best",
+        "-o", str(dest.with_suffix(".%(ext)s")),
+        "--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "--add-header", "Accept-Language:en-US,en;q=0.9",
         "--no-warnings",
-        target,
+        "--no-check-certificates",
+        url,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if result.returncode != 0:
-        raise RuntimeError(f"yt-dlp failed: {result.stderr.strip() or result.stdout.strip()}")
-    # yt-dlp may add .mp3; ensure dest exists
-    if not dest.exists():
-        candidates = list(dest.parent.glob(dest.stem + ".*"))
-        if candidates:
-            candidates[0].rename(dest)
-        else:
-            raise RuntimeError("yt-dlp produced no output file")
+        err = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"yt-dlp failed (url={url}): {err[:500]}")
+    # Find the downloaded file and rename to dest
+    candidates = list(dest.parent.glob(dest.stem + ".*"))
+    if not candidates:
+        raise RuntimeError(f"yt-dlp produced no output for {url}")
+    # Prefer audio extensions
+    audio_exts = {".mp3", ".m4a", ".opus", ".ogg", ".wav", ".aac"}
+    chosen = next((c for c in candidates if c.suffix.lower() in audio_exts), candidates[0])
+    if chosen != dest:
+        chosen.rename(dest)
 
 
 def transcribe_groq(audio_path: Path) -> str:
