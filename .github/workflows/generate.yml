@@ -1,0 +1,49 @@
+name: Generate new sermons
+
+on:
+  schedule:
+    - cron: "0 14 * * 1"   # Monday 14:00 UTC
+  workflow_dispatch:       # manual run button
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sermon-generator (script)
+        uses: actions/checkout@v4
+        with:
+          path: generator
+
+      - name: Checkout sermon-library (data destination)
+        uses: actions/checkout@v4
+        with:
+          repository: adamjhunter-tech/sermon-library
+          path: sermon-library
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run generator
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          DATA_DIR: sermon-library/data
+        run: python generator/generate_sermons.py --limit 4
+
+      - name: Commit and push to sermon-library
+        working-directory: sermon-library
+        run: |
+          git config user.name "sermon-bot"
+          git config user.email "bot@example.com"
+          git add data/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Add new sermon transcripts [skip ci]"
+            git push
+          fi
