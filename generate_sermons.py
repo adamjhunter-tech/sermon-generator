@@ -2,7 +2,7 @@
 """
 generate_sermons.py
 
-Polls the OBPC Lessons RSS feed, detects new episodes, and generates
+Polls the OBPC Lessons and Sermons RSS feeds, detects new episodes, and generates
 JSON files matching the sermon-library schema.
 
 Usage:
@@ -33,10 +33,15 @@ from datetime import datetime
 from pathlib import Path
 
 # ── Configuration ──────────────────────────────────────────────
-RSS_URL = os.environ.get(
-    "RSS_URL",
-    "https://feeds.soundcloud.com/users/soundcloud:users:944857777/sounds.rss"
-)
+RSS_FEEDS = [
+    # OBPC Lessons (Sunday school)
+    "https://feeds.soundcloud.com/users/soundcloud:users:944857777/sounds.rss",
+    # OBPC Sermons (worship services)
+    "https://feeds.soundcloud.com/users/soundcloud:users:189943678/sounds.rss",
+]
+# Allow override via env for testing a single feed
+if os.environ.get("RSS_URL"):
+    RSS_FEEDS = [os.environ["RSS_URL"]]
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
@@ -288,9 +293,17 @@ def main():
     args = parser.parse_args()
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Fetching RSS: {RSS_URL}")
-    episodes = fetch_rss(RSS_URL)
-    print(f"Found {len(episodes)} episodes in feed")
+    all_episodes = []
+    for feed_url in RSS_FEEDS:
+        print(f"Fetching RSS: {feed_url}")
+        try:
+            eps = fetch_rss(feed_url)
+            print(f"  Found {len(eps)} episodes")
+            all_episodes.extend(eps)
+        except Exception as e:
+            print(f"  ERROR fetching feed: {e}", file=sys.stderr)
+    episodes = all_episodes
+    print(f"Total episodes across feeds: {len(episodes)}")
 
     existing = existing_ids(DATA_DIR)
     to_process = []
