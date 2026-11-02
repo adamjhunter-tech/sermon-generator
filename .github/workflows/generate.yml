@@ -22,7 +22,7 @@ jobs:
         with:
           repository: adamjhunter-tech/sermon-library
           path: sermon-library
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.SERMON_LIBRARY_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
