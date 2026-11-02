@@ -175,18 +175,36 @@ def download_audio(url: str, dest: Path) -> None:
 
 
 def transcribe_groq(audio_path: Path) -> str:
-    """Transcribe with Groq Whisper via the official client."""
+    """Transcribe with Groq Whisper via the official client.
+    Compresses large files first to stay under the upload limit."""
     if not GROQ_API_KEY:
         raise RuntimeError("GROQ_API_KEY not set")
+    import subprocess
     from groq import Groq
+
+    # Compress to ~64 kbps mono if the file is large
+    compressed = audio_path.with_suffix(".compressed.mp3")
+    if audio_path.stat().st_size > 20 * 1024 * 1024:
+        print("  compressing audio...")
+        subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", str(audio_path),
+                "-ac", "1", "-ar", "16000", "-b:a", "64k",
+                str(compressed),
+            ],
+            check=True, capture_output=True,
+        )
+        send_path = compressed
+    else:
+        send_path = audio_path
+
     client = Groq(api_key=GROQ_API_KEY)
-    with open(audio_path, "rb") as f:
+    with open(send_path, "rb") as f:
         result = client.audio.transcriptions.create(
-            file=(audio_path.name, f),
+            file=(send_path.name, f),
             model="whisper-large-v3",
             response_format="text",
         )
-    # result is a string when response_format="text"
     return result if isinstance(result, str) else getattr(result, "text", str(result))
 
 
