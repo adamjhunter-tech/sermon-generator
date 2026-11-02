@@ -15,6 +15,15 @@ Generates JSON files for the [sermon-library](https://github.com/adamjhunter-tec
 - Python 3.9+
 - `GROQ_API_KEY` environment variable (free tier at https://console.groq.com)
 
+
+## Rate limits
+
+The free-tier Groq analysis model (`qwen/qwen3.8-27b`) has a low output-token limit.  
+**Keep manual runs at 9 episodes or fewer** to avoid 429 rate-limit errors.  
+The Monday scheduled run uses `--limit 4` and stays well under the limit.
+
+If a run hits a 429, the failed episode is simply skipped and will be retried on the next run.
+
 ## Usage
 
 ```bash
