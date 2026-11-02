@@ -35,6 +35,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install yt-dlp
+        run: pip install yt-dlp
+
       - name: Run generator
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}

@@ -145,13 +145,31 @@ def parse_date(pub_date: str) -> str:
 
 
 def download_audio(url: str, dest: Path) -> None:
-    req = urllib.request.Request(url, headers={"User-Agent": "sermon-library-generator/1.0"})
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, "wb") as f:
-        while True:
-            chunk = resp.read(1024 * 64)
-            if not chunk:
-                break
-            f.write(chunk)
+    """Download audio using yt-dlp (handles SoundCloud 403s)."""
+    import subprocess
+    import shutil
+    # Prefer the SoundCloud page URL if we have it; fall back to the enclosure URL
+    target = url
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "--extract-audio",
+        "--audio-format", "mp3",
+        "--audio-quality", "0",
+        "-o", str(dest.with_suffix("")),
+        "--no-warnings",
+        target,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp failed: {result.stderr.strip() or result.stdout.strip()}")
+    # yt-dlp may add .mp3; ensure dest exists
+    if not dest.exists():
+        candidates = list(dest.parent.glob(dest.stem + ".*"))
+        if candidates:
+            candidates[0].rename(dest)
+        else:
+            raise RuntimeError("yt-dlp produced no output file")
 
 
 def transcribe_groq(audio_path: Path) -> str:
@@ -275,7 +293,9 @@ def process_episode(ep: dict, data_dir: Path, dry_run: bool = False) -> Path | N
         audio_path = Path(tmp) / "audio.mp3"
         if ep["audio_url"]:
             print("  downloading audio...")
-            download_audio(ep["audio_url"], audio_path)
+            # Prefer SoundCloud page URL for yt-dlp; fall back to enclosure
+            dl_url = ep.get("link") or ep["audio_url"]
+            download_audio(dl_url, audio_path)
             print("  transcribing...")
             transcript = transcribe_groq(audio_path)
         else:
