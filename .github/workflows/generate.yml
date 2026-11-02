@@ -35,8 +35,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install yt-dlp
-        run: pip install yt-dlp
+      - name: Install yt-dlp and ffmpeg
+        run: |
+          pip install yt-dlp
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
 
       - name: Run generator
         env:
