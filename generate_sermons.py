@@ -122,13 +122,23 @@ def existing_ids(data_dir: Path) -> set[str]:
 
 def parse_date(pub_date: str) -> str:
     """Best-effort RFC 2822 → YYYY-MM-DD."""
+    if not pub_date:
+        return datetime.utcnow().strftime("%Y-%m-%d")
+    # email.utils handles the common RSS date formats reliably
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(pub_date)
+        if dt:
+            return dt.strftime("%Y-%m-%d")
+    except Exception:
+        pass
     for fmt in (
         "%a, %d %b %Y %H:%M:%S %z",
         "%a, %d %b %Y %H:%M:%S %Z",
         "%Y-%m-%d",
     ):
         try:
-            return datetime.strptime(pub_date[:25], fmt).strftime("%Y-%m-%d")
+            return datetime.strptime(pub_date.strip(), fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
     return datetime.utcnow().strftime("%Y-%m-%d")
