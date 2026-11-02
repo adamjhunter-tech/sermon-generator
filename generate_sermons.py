@@ -229,7 +229,7 @@ def analyze_with_groq(transcript: str, description: str, rss_date: str) -> dict:
     client = Groq(api_key=GROQ_API_KEY)
     prompt = ANALYSIS_PROMPT + f"\n\nDescription:\n{description}\n\nTranscript:\n{transcript[:12000]}"
     result = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="qwen/qwen3-32b",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
         response_format={"type": "json_object"},
