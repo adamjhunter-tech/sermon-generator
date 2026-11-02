@@ -295,9 +295,14 @@ def process_episode(ep: dict, data_dir: Path, dry_run: bool = False) -> Path | N
         audio_path = Path(tmp) / "audio.mp3"
         if ep["audio_url"]:
             print("  downloading audio...")
-            # Prefer SoundCloud page URL for yt-dlp; fall back to enclosure
             dl_url = ep.get("link") or ep["audio_url"]
-            download_audio(dl_url, audio_path)
+            print(f"  url: {dl_url}")
+            try:
+                download_audio(dl_url, audio_path)
+            except Exception as e1:
+                print(f"  page URL failed ({e1}), trying enclosure...")
+                download_audio(ep["audio_url"], audio_path)
+            print(f"  downloaded {audio_path.stat().st_size} bytes")
             print("  transcribing...")
             transcript = transcribe_groq(audio_path)
         else:
