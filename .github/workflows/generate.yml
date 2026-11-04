@@ -48,12 +48,30 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit || '4' }}
         run: python generator/generate_sermons.py --limit "$LIMIT"
 
+      - name: Rebuild data.js
+        run: |
+          python3 - << 'EOF'
+          import json
+          from pathlib import Path
+          from datetime import datetime
+          lessons = []
+          for p in sorted(Path("sermon-library/data").glob("*.json")):
+              try:
+                  lessons.append(json.loads(p.read_text()))
+              except Exception:
+                  pass
+          lessons.sort(key=lambda l: l.get("date") or "0000-00-00", reverse=True)
+          out = {"generated": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"), "count": len(lessons), "lessons": lessons}
+          Path("sermon-library/js/data.js").write_text("// Auto-generated from data/*.json\nwindow.LIBRARY_DATA = " + json.dumps(out, ensure_ascii=False) + ";\n")
+          print(f"Rebuilt data.js with {len(lessons)} lessons")
+          EOF
+
       - name: Commit and push to sermon-library
         working-directory: sermon-library
         run: |
           git config user.name "sermon-bot"
           git config user.email "bot@example.com"
-          git add data/
+          git add data/ js/data.js
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
