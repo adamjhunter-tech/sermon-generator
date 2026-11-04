@@ -48,6 +48,58 @@ jobs:
           LIMIT: ${{ github.event.inputs.limit || '4' }}
         run: python generator/generate_sermons.py --limit "$LIMIT"
 
+      - name: Fill missing dates from RSS
+        run: |
+          python3 - << 'EOF'
+          import json, urllib.request
+          from pathlib import Path
+          from datetime import datetime
+          from xml.etree import ElementTree as ET
+
+          def parse_episodes(rss_bytes):
+              root = ET.fromstring(rss_bytes)
+              eps = []
+              for item in root.findall(".//item"):
+                  title = item.findtext("title") or ""
+                  pub = item.findtext("pubDate") or ""
+                  link = item.findtext("link") or ""
+                  try:
+                      dt = datetime.strptime(pub[:16], "%a, %d %b %Y")
+                      date = dt.strftime("%Y-%m-%d")
+                  except:
+                      date = None
+                  eps.append({"title": title, "date": date, "link": link})
+              return eps
+
+          print("Fetching RSS...")
+          rss = urllib.request.urlopen("https://feeds.soundcloud.com/users/soundcloud:users:944857777/sounds.rss", timeout=30).read()
+          episodes = parse_episodes(rss)
+          ep_by_slug = {}
+          for e in episodes:
+              if e["link"] and e["date"]:
+                  slug = e["link"].rstrip("/").split("/")[-1]
+                  ep_by_slug[slug] = e
+          print(f"Episodes indexed: {len(ep_by_slug)}")
+
+          updated = 0
+          for p in Path("sermon-library/data").glob("*.json"):
+              try:
+                  l = json.loads(p.read_text())
+              except:
+                  continue
+              if l.get("date") and l["date"] not in ("Unknown", None, ""):
+                  continue
+              sc = l.get("soundcloud_url") or ""
+              if not sc:
+                  continue
+              slug = sc.rstrip("/").split("/")[-1]
+              if slug in ep_by_slug:
+                  l["date"] = ep_by_slug[slug]["date"]
+                  p.write_text(json.dumps(l, indent=2, ensure_ascii=False) + "\n")
+                  updated += 1
+          print(f"Filled dates for {updated} lessons")
+          EOF
+
       - name: Rebuild data.js
         run: |
           python3 - << 'EOF'
