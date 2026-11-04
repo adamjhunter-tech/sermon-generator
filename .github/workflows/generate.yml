@@ -57,7 +57,9 @@ jobs:
           lessons = []
           for p in sorted(Path("sermon-library/data").glob("*.json")):
               try:
-                  lessons.append(json.loads(p.read_text()))
+                  l = json.loads(p.read_text())
+              l.pop("transcript", None)
+              lessons.append(l)
               except Exception:
                   pass
           lessons.sort(key=lambda l: l.get("date") or "0000-00-00", reverse=True)
