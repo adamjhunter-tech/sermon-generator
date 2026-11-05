@@ -100,6 +100,66 @@ jobs:
           print(f"Filled dates for {updated} lessons")
           EOF
 
+      - name: Update progress.json
+        run: |
+          python3 - << 'EOF'
+          import json, urllib.request
+          from pathlib import Path
+          from datetime import datetime
+          from xml.etree import ElementTree as ET
+
+          def parse_episodes(rss_bytes):
+              root = ET.fromstring(rss_bytes)
+              eps = []
+              for item in root.findall(".//item"):
+                  title = item.findtext("title") or ""
+                  pub = item.findtext("pubDate") or ""
+                  link = item.findtext("link") or ""
+                  try:
+                      dt = datetime.strptime(pub[:16], "%a, %d %b %Y")
+                      date = dt.strftime("%Y-%m-%d")
+                  except:
+                      date = None
+                  eps.append({"title": title, "date": date, "link": link})
+              return eps
+
+          feeds = [
+              ("Lessons", "https://feeds.soundcloud.com/users/soundcloud:users:944857777/sounds.rss"),
+              ("Sermons", "https://feeds.soundcloud.com/users/soundcloud:users:189943678/sounds.rss"),
+          ]
+          all_eps = []
+          for name, url in feeds:
+              try:
+                  data = urllib.request.urlopen(url, timeout=30).read()
+                  eps = parse_episodes(data)
+                  for e in eps:
+                      e["feed"] = name
+                  all_eps.extend(eps)
+              except Exception as ex:
+                  print(f"Feed error: {ex}")
+
+          existing = set()
+          for p in Path("sermon-library/data").glob("*.json"):
+              try:
+                  l = json.loads(p.read_text())
+                  sc = l.get("soundcloud_url") or ""
+                  if sc:
+                      existing.add(sc.rstrip("/").split("/")[-1])
+              except:
+                  pass
+
+          status = []
+          for e in all_eps:
+              if not e["link"]:
+                  continue
+              slug = e["link"].rstrip("/").split("/")[-1]
+              status.append({"title": e["title"], "date": e["date"], "feed": e["feed"], "link": e["link"], "done": slug in existing})
+          status.sort(key=lambda x: x["date"] or "0000", reverse=True)
+          done = sum(1 for s in status if s["done"])
+          Path("sermon-library/progress.json").write_text(json.dumps({"generated": datetime.utcnow().strftime("%Y-%m-%d %H:%M"), "total": len(status), "done": done, "remaining": len(status)-done, "episodes": status}, indent=2))
+          print(f"Progress: {done}/{len(status)} done, {len(status)-done} remaining")
+          EOF
+
       - name: Rebuild data.js
         run: |
           python3 - << 'EOF'
@@ -126,7 +186,7 @@ jobs:
           git config user.name "sermon-bot"
           git config user.email "bot@example.com"
           git stash && git pull --rebase origin main && git stash pop
-          git add data/ js/data.js
+          git add data/ js/data.js progress.json
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
