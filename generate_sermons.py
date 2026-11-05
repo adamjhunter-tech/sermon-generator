@@ -115,9 +115,20 @@ def fetch_rss(url: str) -> list[dict]:
 
 
 def existing_ids(data_dir: Path) -> set[str]:
+    """Return both filenames and SoundCloud URL slugs of existing lessons."""
     if not data_dir.exists():
         return set()
-    return {p.stem for p in data_dir.glob("*.json")}
+    ids = set()
+    for p in data_dir.glob("*.json"):
+        ids.add(p.stem)
+        try:
+            data = json.loads(p.read_text())
+            sc = data.get("soundcloud_url") or ""
+            if sc:
+                ids.add(sc.rstrip("/").split("/")[-1])
+        except Exception:
+            pass
+    return ids
 
 
 def parse_date(pub_date: str) -> str:
@@ -339,9 +350,10 @@ def main():
         date = parse_date(ep["pubDate"])
         clean = re.sub(r"\s*\([^)]*\)\s*$", "", ep["title"]).strip()
         lid = f"{date}-{slugify(clean)}"
+        sc_slug = (ep.get("link") or "").rstrip("/").split("/")[-1]
         if args.force and args.force.lower() in ep["title"].lower():
             to_process.append(ep)
-        elif lid not in existing:
+        elif lid not in existing and sc_slug not in existing:
             to_process.append(ep)
         if len(to_process) >= args.limit:
             break
