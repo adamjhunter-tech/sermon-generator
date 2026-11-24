@@ -42,11 +42,19 @@ jobs:
           sudo apt-get install -y -qq ffmpeg
 
       - name: Run generator
+        id: generate
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           DATA_DIR: sermon-library/data
           LIMIT: ${{ github.event.inputs.limit || '4' }}
-        run: python generator/generate_sermons.py --limit "$LIMIT"
+        run: |
+          set +e
+          python generator/generate_sermons.py --limit "$LIMIT"
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          # Record the failure but keep going so successful episodes are still
+          # dated, added to progress.json, and committed. A final step fails the job.
+          exit 0
 
       - name: Fill missing dates from RSS
         run: |
@@ -193,3 +201,10 @@ jobs:
             git commit -m "Add new sermon transcripts [skip ci]"
             git push
           fi
+
+      - name: Fail if any episode failed
+        if: steps.generate.outputs.exit_code != '0'
+        run: |
+          echo "Generator exit code ${{ steps.generate.outputs.exit_code }}."
+          echo "Successful episodes were committed above. See the generator log for the error summary."
+          exit 1

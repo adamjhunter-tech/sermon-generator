@@ -22,7 +22,7 @@ The free-tier Groq analysis model (`qwen/qwen3.8-27b`) has a low output-token li
 **Keep manual runs at 9 episodes or fewer** to avoid 429 rate-limit errors.  
 The Monday scheduled run uses `--limit 4` and stays well under the limit.
 
-If a run hits a 429, the failed episode is simply skipped and will be retried on the next run.
+The analysis call sets `max_tokens` under the on-demand output-token limit and retries HTTP 429s with backoff. If an episode still fails, it is skipped so later episodes can finish. The script then prints an error summary and exits non-zero. The workflow still commits episodes that succeeded, and the job fails afterward so the skipped episode is visible and picked up on the next run.
 
 ## Usage
 
