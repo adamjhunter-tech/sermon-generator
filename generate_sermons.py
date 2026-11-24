@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -44,6 +45,16 @@ if os.environ.get("RSS_URL"):
     RSS_FEEDS = [os.environ["RSS_URL"]]
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+# qwen/qwen3.8-27b on the on-demand tier allows 1000 output tokens per minute.
+# Omitting max_tokens makes Groq request 2048 and reject the call with
+# rate_limit_exceeded ("Request too large ... Requested 2048"). Stay under
+# that cap. The prompt asks for short JSON: a full response at those limits
+# is roughly 750 tokens, so 900 leaves room and is not truncated.
+GROQ_MAX_TOKENS = 900
+GROQ_RATE_LIMIT_ATTEMPTS = 3
+GROQ_RATE_LIMIT_DEFAULT_WAIT = 60
+# Honor a reset up to a few minutes; ignore a bad header that would stall the run.
+GROQ_RATE_LIMIT_MAX_WAIT = 180
 
 # LLM prompt for metadata extraction (works with Groq, OpenAI, etc.)
 ANALYSIS_PROMPT = """You are processing a church sermon/Sunday school transcript.
@@ -67,14 +78,15 @@ Extract structured metadata and return ONLY valid JSON with this exact shape:
       "scripture": ["Book Chapter:Verse"]
     }
   ],
-  "summary": "string (2-4 paragraphs, pastoral tone, no first person)"
+  "summary": "string (2 short paragraphs, about 80-100 words total, pastoral tone, no first person)"
 }
 
 Rules:
-- tags: 4-8 concise topics. Prefer theological terms. Do not invent series names as tags.
-- scripture_references: normalize to standard form (e.g. "1 Corinthians 15:12-28"). Mark primary text as "quoted".
-- outline: 3-6 major points with short subpoints.
-- summary: accurate, clear, suitable for a public library page.
+- Return concise JSON only. Keep every string short so the object is not cut off.
+- tags: 4-6 concise topics. Prefer theological terms. Do not invent series names as tags.
+- scripture_references: at most 6 of the most important passages. Normalize to standard form (e.g. "1 Corinthians 15:12-28"). Mark the primary text as "quoted".
+- outline: 3-4 major points. Each point has a short title, 1-2 brief subpoints (one short sentence each), and at most 2 scripture references.
+- summary: exactly 2 short paragraphs (about 80-100 words together), accurate and suitable for a public library page.
 - date: extract from transcript or description; if unknown use the RSS pubDate.
 
 Transcript and description:
@@ -219,6 +231,122 @@ def transcribe_groq(audio_path: Path) -> str:
     return result if isinstance(result, str) else getattr(result, "text", str(result))
 
 
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """True for Groq 429 / rate_limit_exceeded responses."""
+    status = getattr(exc, "status_code", None)
+    if status == 429 or status == "429":
+        return True
+    if type(exc).__name__ in {"RateLimitError", "TooManyRequestsError"}:
+        return True
+    text = str(exc).lower()
+    return (
+        "rate_limit_exceeded" in text
+        or "rate limit" in text
+        or "error code: 429" in text
+        or "too many requests" in text
+    )
+
+
+def _header_value(exc: BaseException, name: str) -> str | None:
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) if response is not None else None
+    if headers is None:
+        headers = getattr(exc, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get(name)
+    except Exception:
+        return None
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _parse_duration_seconds(raw: str) -> float | None:
+    """Parse a Retry-After delta, a '20s' / '1m20s' / '250ms' span, or an HTTP date."""
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    total = 0.0
+    found = False
+    # 'ms' before 'm'/'s' so "250ms" and "1m30s" both parse. No word boundary:
+    # there is none between the "m" and the "30" in "1m30s".
+    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*(ms|h|m|s)", text, re.I):
+        found = True
+        value = float(match.group(1))
+        unit = match.group(2).lower()
+        total += value * {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}[unit]
+    if found:
+        return total
+    try:
+        from email.utils import parsedate_to_datetime
+        when = parsedate_to_datetime(text)
+        if when is not None:
+            return (when - datetime.now(when.tzinfo)).total_seconds()
+    except Exception:
+        pass
+    return None
+
+
+def _suggested_wait_from_message(text: str) -> str | None:
+    match = re.search(
+        r"try again in\s+((?:\d+(?:\.\d+)?\s*(?:ms|h|m|s)\s*)+)",
+        text,
+        re.I,
+    )
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _retry_wait_seconds(exc: BaseException) -> float:
+    """Honor Retry-After or the server's suggested wait; otherwise about 60s."""
+    candidates = (
+        _header_value(exc, "retry-after"),
+        _suggested_wait_from_message(str(exc)),
+        _header_value(exc, "x-ratelimit-reset-tokens"),
+        _header_value(exc, "x-ratelimit-reset-requests"),
+    )
+    for raw in candidates:
+        if not raw:
+            continue
+        seconds = _parse_duration_seconds(raw)
+        if seconds is not None and seconds > 0:
+            return min(seconds, float(GROQ_RATE_LIMIT_MAX_WAIT))
+    return float(GROQ_RATE_LIMIT_DEFAULT_WAIT)
+
+
+def _create_metadata_completion(client, prompt: str):
+    """Call the metadata model, retrying 429s a few times before giving up."""
+    for attempt in range(1, GROQ_RATE_LIMIT_ATTEMPTS + 1):
+        try:
+            return client.chat.completions.create(
+                model="qwen/qwen3.8-27b",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2,
+                max_tokens=GROQ_MAX_TOKENS,
+                response_format={"type": "json_object"},
+            )
+        except Exception as exc:
+            if not _is_rate_limit_error(exc) or attempt >= GROQ_RATE_LIMIT_ATTEMPTS:
+                raise
+            wait = _retry_wait_seconds(exc)
+            print(
+                f"  rate limited (attempt {attempt}/{GROQ_RATE_LIMIT_ATTEMPTS}); "
+                f"waiting {wait:.1f}s before retry",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(wait)
+    raise RuntimeError("Groq metadata call failed")
+
+
 def analyze_with_groq(transcript: str, description: str, rss_date: str) -> dict:
     """Call Groq LLM for structured metadata. Falls back to simple extraction if no key."""
     if not GROQ_API_KEY:
@@ -239,14 +367,17 @@ def analyze_with_groq(transcript: str, description: str, rss_date: str) -> dict:
     from groq import Groq
     client = Groq(api_key=GROQ_API_KEY)
     prompt = ANALYSIS_PROMPT + f"\n\nDescription:\n{description}\n\nTranscript:\n{transcript[:12000]}"
-    result = client.chat.completions.create(
-        model="qwen/qwen3.8-27b",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        response_format={"type": "json_object"},
-    )
-    content = result.choices[0].message.content
-    return json.loads(content)
+    result = _create_metadata_completion(client, prompt)
+    content = result.choices[0].message.content or ""
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as exc:
+        finish = getattr(result.choices[0], "finish_reason", None)
+        if finish == "length":
+            raise RuntimeError(
+                f"Groq metadata JSON was truncated at max_tokens={GROQ_MAX_TOKENS}"
+            ) from exc
+        raise
 
 
 def build_lesson(ep: dict, analysis: dict, transcript: str) -> dict:
@@ -364,6 +495,7 @@ def main():
 
     print(f"Will process {len(to_process)} episode(s)")
     created = []
+    failed: list[tuple[str, BaseException]] = []
     for ep in to_process:
         try:
             path = process_episode(ep, DATA_DIR, dry_run=args.dry_run)
@@ -371,8 +503,18 @@ def main():
                 created.append(path)
         except Exception as e:
             print(f"  ERROR: {e}", file=sys.stderr)
+            failed.append((ep.get("title") or "untitled episode", e))
 
     print(f"Done. Created/updated {len(created)} file(s).")
+    if failed:
+        print(
+            f"ERROR SUMMARY: {len(failed)} episode(s) failed and were not written:",
+            flush=True,
+        )
+        for title, err in failed:
+            print(f"  - {title}: {err}", flush=True)
+        # Non-zero so the workflow can fail after it commits the episodes that did succeed.
+        sys.exit(1)
 
 
 if __name__ == "__main__":
